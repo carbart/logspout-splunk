@@ -132,6 +132,11 @@ func NewHTTPAdapter(route *router.Route) (router.LogAdapter, error) {
 	defaultSplunkToken := ""
 	splunkToken := getStringParameter(route.Options, "splunk.token", defaultSplunkToken)
 
+	splunkInsecure := getStringParameter(route.Options, "splunk.insecure", "false")
+	if splunkInsecure == "true" {
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	}
+
 	// Create the client
 	client := &http.Client{Transport: transport}
 
