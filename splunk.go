@@ -300,7 +300,7 @@ func (a *HTTPAdapter) flushHttp(reason string) {
 func createRequest(url string, useGzip bool, splunkToken string, payload string) *http.Request {
 	var request *http.Request
 	if (splunkToken != "") {
-		request.Header.set("Authorization", "Splunk " + splunkToken)
+		request.Header.Set("Authorization", "Splunk " + splunkToken)
 	}
 	if useGzip {
 		gzipBuffer := new(bytes.Buffer)
