@@ -109,7 +109,7 @@ type HTTPAdapter struct {
 func NewHTTPAdapter(route *router.Route) (router.LogAdapter, error) {
 
 	// Figure out the URI and create the HTTP client
-	defaultPath := ""
+	defaultPath := "/services/collector"
 	path := getStringParameter(route.Options, "http.path", defaultPath)
 	endpointUrl := fmt.Sprintf("%s://%s%s", route.Adapter, route.Address, path)
 	debug("http: url:", endpointUrl)
@@ -133,7 +133,7 @@ func NewHTTPAdapter(route *router.Route) (router.LogAdapter, error) {
 	splunkToken := getStringParameter(route.Options, "splunk.token", defaultSplunkToken)
 
 	splunkInsecure := getStringParameter(route.Options, "splunk.insecure", "false")
-	if splunkInsecure == "true" {
+	if splunkInsecure == "true" || true {
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
 
@@ -246,13 +246,12 @@ func (a *HTTPAdapter) flushHttp(reason string) {
 	for i := range buffer {
 		m := buffer[i]
 		httpMessage := HTTPMessage{
-			Message:  m.Data,
-			Time:     m.Time.Format(time.RFC3339),
-			Source:   m.Source,
-			Name:     m.Container.Name,
-			ID:       m.Container.ID,
-			Image:    m.Container.Config.Image,
-			Hostname: m.Container.Config.Hostname,
+			Time:		time.Now().Unix(),
+			Hostname:	m.Container.Config.Hostname,
+			Source:		m.Source,
+			SourceType:	"docker-logs",
+			Index:		"main",
+			Event:		HTTPMessageEvent{Message:	m.Data},
 		}
 		message, err := json.Marshal(httpMessage)
 		if err != nil {
@@ -304,9 +303,6 @@ func (a *HTTPAdapter) flushHttp(reason string) {
 // Create the request based on whether GZIP compression is to be used
 func createRequest(url string, useGzip bool, splunkToken string, payload string) *http.Request {
 	var request *http.Request
-	if (splunkToken != "") {
-		request.Header.Set("Authorization", "Splunk " + splunkToken)
-	}
 	if useGzip {
 		gzipBuffer := new(bytes.Buffer)
 		gzipWriter := gzip.NewWriter(gzipBuffer)
@@ -336,16 +332,24 @@ func createRequest(url string, useGzip bool, splunkToken string, payload string)
 			die("", "http: error on http.NewRequest:", err, url)
 		}
 	}
+
+	if (splunkToken != "") {
+                 request.Header.Set("Authorization", "Splunk " + splunkToken)
+        }
+
 	return request
+}
+
+type HTTPMessageEvent struct {
+        Message         string `json:"message"`
 }
 
 // HTTPMessage is a simple JSON representation of the log message.
 type HTTPMessage struct {
-	Message  string `json:"message"`
-	Time     string `json:"time"`
-	Source   string `json:"source"`
-	Name     string `json:"docker_name"`
-	ID       string `json:"docker_id"`
-	Image    string `json:"docker_image"`
-	Hostname string `json:"docker_hostname"`
+	Time		int64 `json:"time"`
+	Source		string `json:"source"`
+	SourceType	string `json:"sourcetype"`
+	Index		string `json:"index"`
+	Hostname	string `json:"host"`
+	Event		HTTPMessageEvent	`json:"event"`
 }
