@@ -1,4 +1,4 @@
-package http
+package splunk
 
 import (
 	"bytes"
@@ -22,8 +22,7 @@ import (
 )
 
 func init() {
-	router.AdapterFactories.Register(NewHTTPAdapter, "http")
-	router.AdapterFactories.Register(NewHTTPAdapter, "https")
+	router.AdapterFactories.Register(NewSplunkAdapter, "splunk")
 }
 
 func debug(v ...interface{}) {
@@ -89,8 +88,8 @@ func dial(netw, addr string) (net.Conn, error) {
 	return dial, err
 }
 
-// HTTPAdapter is an adapter that POSTs logs to an HTTP endpoint
-type HTTPAdapter struct {
+// SplunkAdapter is an adapter that POSTs logs to an HTTP endpoint
+type SplunkAdapter struct {
 	route             *router.Route
 	url               string
 	client            *http.Client
@@ -105,8 +104,8 @@ type HTTPAdapter struct {
 	splunkToken	  string
 }
 
-// NewHTTPAdapter creates an HTTPAdapter
-func NewHTTPAdapter(route *router.Route) (router.LogAdapter, error) {
+// NewSplunkAdapter creates an SplunkAdapter
+func NewSplunkAdapter(route *router.Route) (router.LogAdapter, error) {
 
 	// Figure out the URI and create the HTTP client
 	defaultPath := "/services/collector"
@@ -180,7 +179,7 @@ func NewHTTPAdapter(route *router.Route) (router.LogAdapter, error) {
 	}
 
 	// Make the HTTP adapter
-	return &HTTPAdapter{
+	return &SplunkAdapter{
 		route:    route,
 		url:      endpointUrl,
 		client:   client,
@@ -195,7 +194,7 @@ func NewHTTPAdapter(route *router.Route) (router.LogAdapter, error) {
 }
 
 // Stream implements the router.LogAdapter interface
-func (a *HTTPAdapter) Stream(logstream chan *router.Message) {
+func (a *SplunkAdapter) Stream(logstream chan *router.Message) {
 	for {
 		select {
 		case message := <-logstream:
@@ -218,7 +217,7 @@ func (a *HTTPAdapter) Stream(logstream chan *router.Message) {
 }
 
 // Flushes the accumulated messages in the buffer
-func (a *HTTPAdapter) flushHttp(reason string) {
+func (a *SplunkAdapter) flushHttp(reason string) {
 
 	// Stop the timer and drain any possible remaining events
 	a.timer.Stop()
@@ -245,7 +244,7 @@ func (a *HTTPAdapter) flushHttp(reason string) {
 	messages := make([]string, 0, len(buffer))
 	for i := range buffer {
 		m := buffer[i]
-		httpMessage := HTTPMessage{
+		splunkMessage := SplunkMessage{
 			Time:		time.Now().Unix(),
 			Hostname:	m.Container.Config.Hostname,
 			Source:		m.Source,
@@ -253,7 +252,7 @@ func (a *HTTPAdapter) flushHttp(reason string) {
 			Index:		"main",
 			Event:		HTTPMessageEvent{Message:	m.Data},
 		}
-		message, err := json.Marshal(httpMessage)
+		message, err := json.Marshal(splunkMessage)
 		if err != nil {
 			debug("flushHttp - Error encoding JSON: ", err)
 			continue
@@ -340,16 +339,16 @@ func createRequest(url string, useGzip bool, splunkToken string, payload string)
 	return request
 }
 
-type HTTPMessageEvent struct {
+type SplunkMessageEvent struct {
         Message         string `json:"message"`
 }
 
-// HTTPMessage is a simple JSON representation of the log message.
-type HTTPMessage struct {
+// SplunkMessage is a simple JSON representation of the log message.
+type SplunkMessage struct {
 	Time		int64 `json:"time"`
 	Source		string `json:"source"`
 	SourceType	string `json:"sourcetype"`
 	Index		string `json:"index"`
 	Hostname	string `json:"host"`
-	Event		HTTPMessageEvent	`json:"event"`
+	Event		SplunkMessageEvent	`json:"event"`
 }
