@@ -51,7 +51,7 @@ func getIntParameter(
 	if value, ok := options[parameterName]; ok {
 		valueInt, err := strconv.Atoi(value)
 		if err != nil {
-			debug("http: invalid value for parameter:", parameterName, value)
+			debug("splunk: invalid value for parameter:", parameterName, value)
 			return dfault
 		} else {
 			return valueInt
@@ -68,7 +68,7 @@ func getDurationParameter(
 	if value, ok := options[parameterName]; ok {
 		valueDuration, err := time.ParseDuration(value)
 		if err != nil {
-			debug("http: invalid value for parameter:", parameterName, value)
+			debug("splunk: invalid value for parameter:", parameterName, value)
 			return dfault
 		} else {
 			return valueDuration
@@ -81,9 +81,9 @@ func getDurationParameter(
 func dial(netw, addr string) (net.Conn, error) {
 	dial, err := net.Dial(netw, addr)
 	if err != nil {
-		debug("http: new dial", dial, err, netw, addr)
+		debug("splunk: new dial", dial, err, netw, addr)
 	} else {
-		debug("http: new dial", dial, netw, addr)
+		debug("splunk: new dial", dial, netw, addr)
 	}
 	return dial, err
 }
@@ -102,16 +102,21 @@ type SplunkAdapter struct {
 	useGzip           bool
 	crash		  bool
 	splunkToken	  string
+	splunkIndex	  string
+	splunkSourcetype  string
 }
 
 // NewSplunkAdapter creates an SplunkAdapter
 func NewSplunkAdapter(route *router.Route) (router.LogAdapter, error) {
 
 	// Figure out the URI and create the HTTP client
-	defaultPath := "/services/collector"
-	path := getStringParameter(route.Options, "http.path", defaultPath)
-	endpointUrl := fmt.Sprintf("%s://%s%s", route.Adapter, route.Address, path)
-	debug("http: url:", endpointUrl)
+	path := "/services/collector"
+	if os.Getenv("SPLUNK_HEC_PATH") != "" {
+		path = os.Getenv("SPLUNK_HEC_PATH")
+	}
+
+	endpointUrl := fmt.Sprintf("https://%s%s", route.Address, path)
+	debug("splunk: url:", endpointUrl)
 	transport := &http.Transport{}
 	transport.Dial = dial
 
@@ -121,20 +126,29 @@ func NewSplunkAdapter(route *router.Route) (router.LogAdapter, error) {
 	if proxyUrlString != "" {
 		proxyUrl, err := url.Parse(proxyUrlString)
 		if err != nil {
-			die("", "http: cannot parse proxy url:", err, proxyUrlString)
+			die("", "splunk: cannot parse proxy url:", err, proxyUrlString)
 		}
 		transport.Proxy = http.ProxyURL(proxyUrl)
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-		debug("http: proxy url:", proxyUrl)
+		debug("splunk: proxy url:", proxyUrl)
 	}
 
-	defaultSplunkToken := ""
-	splunkToken := getStringParameter(route.Options, "splunk.token", defaultSplunkToken)
+	// Figure out the Splunk specifig settings
+	splunkToken := os.Getenv("SPLUNK_TOKEN")
 
-	splunkInsecure := getStringParameter(route.Options, "splunk.insecure", "false")
-	if splunkInsecure == "true" || true {
+	if os.Getenv("SPLUNK_INSECURE") == "true" {
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
+
+	splunkIndex := "main"
+        if os.Getenv("SPLUNK_INDEX") != "" {
+		splunkIndex = os.Getenv("SPLUNK_INDEX")
+	}
+
+        splunkSourcetype := "docker"
+        if os.Getenv("SPLUNK_SOURCETYPE") != "" {
+                splunkSourcetype = os.Getenv("SPLUNK_SOURCETYPE")
+        }
 
 	// Create the client
 	client := &http.Client{Transport: transport}
@@ -144,7 +158,7 @@ func NewSplunkAdapter(route *router.Route) (router.LogAdapter, error) {
 	capacity := getIntParameter(
 		route.Options, "http.buffer.capacity", defaultCapacity)
 	if capacity < 1 || capacity > 10000 {
-		debug("http: non-sensical value for parameter: http.buffer.capacity",
+		debug("splunk: non-sensical value for parameter: http.buffer.capacity",
 			capacity, "using default:", defaultCapacity)
 		capacity = defaultCapacity
 	}
@@ -156,7 +170,7 @@ func NewSplunkAdapter(route *router.Route) (router.LogAdapter, error) {
 		route.Options, "http.buffer.timeout", defaultTimeout)
 	timeoutSeconds := timeout.Seconds()
 	if timeoutSeconds < .1 || timeoutSeconds > 600 {
-		debug("http: non-sensical value for parameter: http.buffer.timeout",
+		debug("splunk: non-sensical value for parameter: http.buffer.timeout",
 			timeout, "using default:", defaultTimeout)
 		timeout = defaultTimeout
 	}
@@ -167,7 +181,7 @@ func NewSplunkAdapter(route *router.Route) (router.LogAdapter, error) {
 	useGZipString := getStringParameter(route.Options, "http.gzip", "false")
 	if useGZipString == "true" {
 		useGzip = true
-		debug("http: gzip compression enabled")
+		debug("splunk: gzip compression enabled")
 	}
 
 	// Should we crash on an error or keep going?
@@ -175,7 +189,7 @@ func NewSplunkAdapter(route *router.Route) (router.LogAdapter, error) {
 	crashString := getStringParameter(route.Options, "http.crash", "true")
 	if crashString == "false" {
 		crash = false
-		debug("http: don't crash, keep going")
+		debug("splunk: don't crash, keep going")
 	}
 
 	// Make the HTTP adapter
@@ -189,7 +203,9 @@ func NewSplunkAdapter(route *router.Route) (router.LogAdapter, error) {
 		timeout:  timeout,
 		useGzip:  useGzip,
 		crash:    crash,
-		splunkToken:	splunkToken,
+		splunkToken:		splunkToken,
+		splunkIndex:		splunkIndex,
+		splunkSourcetype:	splunkSourcetype,
 	}, nil
 }
 
@@ -244,13 +260,20 @@ func (a *SplunkAdapter) flushHttp(reason string) {
 	messages := make([]string, 0, len(buffer))
 	for i := range buffer {
 		m := buffer[i]
+		splunkMessageEvent := SplunkMessageEvent{Message: m.Data}
+		if os.Getenv("SPLUNK_DOCKER_LABELS") != "" {
+			splunkMessageEvent.Labels = make(map[string]string)
+			for label, value := range m.Container.Config.Labels {
+				splunkMessageEvent.Labels[strings.Replace(label, ".", "_", -1)] = value
+			}
+		}
 		splunkMessage := SplunkMessage{
 			Time:		time.Now().Unix(),
 			Hostname:	m.Container.Config.Hostname,
 			Source:		m.Source,
-			SourceType:	"docker-logs",
-			Index:		"main",
-			Event:		HTTPMessageEvent{Message:	m.Data},
+			SourceType:	a.splunkSourcetype,
+			Index:		a.splunkIndex,
+			Event:		splunkMessageEvent,
 		}
 		message, err := json.Marshal(splunkMessage)
 		if err != nil {
@@ -270,19 +293,19 @@ func (a *SplunkAdapter) flushHttp(reason string) {
 		start := time.Now()
 		response, err := a.client.Do(request)
 		if err != nil {
-			debug("http - error on client.Do:", err, a.url)
+			debug("splunk - error on client.Do:", err, a.url)
 			// TODO @raychaser - now what?
 			if a.crash {
-				die("http - error on client.Do:", err, a.url)
+				die("splunk - error on client.Do:", err, a.url)
 			} else {
-				debug("http: error on client.Do:", err)
+				debug("splunk: error on client.Do:", err)
 			}
 		}
 		if response.StatusCode != 200 {
-			debug("http: response not 200 but", response.StatusCode)
+			debug("splunk: response not 200 but", response.StatusCode)
 			// TODO @raychaser - now what?
 			if a.crash {
-				die("http: response not 200 but", response.StatusCode)
+				die("splunk: response not 200 but", response.StatusCode)
 			}
 		}
 
@@ -294,7 +317,7 @@ func (a *SplunkAdapter) flushHttp(reason string) {
 		// Bookkeeping, logging
 		timeAll := time.Since(start)
 		a.totalMessageCount += len(messages)
-		debug("http: flushed:", reason, "messages:", len(messages),
+		debug("splunk: flushed:", reason, "messages:", len(messages),
 			"in:", timeAll, "total:", a.totalMessageCount)
 	}()
 }
@@ -308,27 +331,27 @@ func createRequest(url string, useGzip bool, splunkToken string, payload string)
 		_, err := gzipWriter.Write([]byte(payload))
 		if err != nil {
 			// TODO @raychaser - now what?
-			die("http: unable to write to GZIP writer:", err)
+			die("splunk: unable to write to GZIP writer:", err)
 		}
 		err = gzipWriter.Close()
 		if err != nil {
 			// TODO @raychaser - now what?
-			die("http: unable to close GZIP writer:", err)
+			die("splunk: unable to close GZIP writer:", err)
 		}
 		request, err = http.NewRequest("POST", url, gzipBuffer)
 		if err != nil {
-			debug("http: error on http.NewRequest:", err, url)
+			debug("splunk: error on http.NewRequest:", err, url)
 			// TODO @raychaser - now what?
-			die("", "http: error on http.NewRequest:", err, url)
+			die("", "splunk: error on http.NewRequest:", err, url)
 		}
 		request.Header.Set("Content-Encoding", "gzip")
 	} else {
 		var err error
 		request, err = http.NewRequest("POST", url, strings.NewReader(payload))
 		if err != nil {
-			debug("http: error on http.NewRequest:", err, url)
+			debug("splunk: error on http.NewRequest:", err, url)
 			// TODO @raychaser - now what?
-			die("", "http: error on http.NewRequest:", err, url)
+			die("", "splunk: error on http.NewRequest:", err, url)
 		}
 	}
 
@@ -340,7 +363,8 @@ func createRequest(url string, useGzip bool, splunkToken string, payload string)
 }
 
 type SplunkMessageEvent struct {
-        Message         string `json:"message"`
+        Message         string			`json:"message"`
+	Labels		map[string]string	`json:"labels"`
 }
 
 // SplunkMessage is a simple JSON representation of the log message.
