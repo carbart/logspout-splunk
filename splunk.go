@@ -268,7 +268,7 @@ func (a *SplunkAdapter) flushHttp(reason string) {
 			}
 		}
 		splunkMessage := SplunkMessage{
-			Time:		time.Now().Unix(),
+			Time:		m.Time.Unix(),
 			Hostname:	m.Container.Config.Hostname,
 			Source:		m.Source,
 			SourceType:	a.splunkSourcetype,
