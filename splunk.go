@@ -300,8 +300,7 @@ func (a *SplunkAdapter) flushHttp(reason string) {
 			} else {
 				debug("splunk: error on client.Do:", err)
 			}
-		}
-		if response.StatusCode != 200 {
+		} else if response.StatusCode != 200 {
 			debug("splunk: response not 200 but", response.StatusCode)
 			// TODO @raychaser - now what?
 			if a.crash {
@@ -311,8 +310,10 @@ func (a *SplunkAdapter) flushHttp(reason string) {
 
 		// Make sure the entire response body is read so the HTTP
 		// connection can be reused
-		io.Copy(ioutil.Discard, response.Body)
-		response.Body.Close()
+		if response != nil {
+			io.Copy(ioutil.Discard, response.Body)
+			response.Body.Close()
+		}
 
 		// Bookkeeping, logging
 		timeAll := time.Since(start)
